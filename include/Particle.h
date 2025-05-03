@@ -22,18 +22,19 @@ public:
     void setEnergy(double energy);
     void addEnergy(double delta);
     double getMaxEnergy() const;
-
     double getMass() const;
 
     void collide(Particle& other); 
     bool isColliding(const Particle& other) const;
+
+    // Make radius public for access in copying
+    const double PARTICLE_RADIUS;
 
 private:
     double x, y;
     double vx, vy;
     double energy;
     const double MAX_ENERGY;
-    const double PARTICLE_RADIUS;
     double mass;
     mutable std::mutex particleMutex;
 };

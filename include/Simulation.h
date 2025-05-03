@@ -49,12 +49,22 @@ private:
     };
     
     std::vector<GridCell> spatialGrid;
-    const double gridCellSize = 2.0;
+    double gridCellSize; // Will be calculated based on average particle radius
     size_t gridWidth, gridHeight;
     
     void updateSpatialGrid();
+    void recalculateGridSize();
     std::pair<int, int> getGridCoords(double x, double y) const;
     size_t getGridIndex(int gridX, int gridY) const;
+
+    struct ParticleForce {
+        std::atomic<double> fx{0.0};
+        std::atomic<double> fy{0.0};
+    };
+    std::vector<ParticleForce> particleForces;
+    
+    void calculateForces();
+    void applyForces();
 
     std::vector<std::unique_ptr<Particle>> particles;
     std::unique_ptr<ContainmentField> containmentField;

@@ -23,13 +23,19 @@ double ContainmentField::getContainmentForce(const Particle& particle) const {
     
     // Calculate distance from center as a fraction of field size
     double distance = std::sqrt(x*x + y*y);
-    double normalizedDist = distance / (size/2.0); // 0 at center, 1 at boundary
+    double maxRadius = size/2.0;
+    double normalizedDist = distance / maxRadius; // 0 at center, 1 at boundary
     
     if (distance < 1e-10) return 0.0; // Zero force at center
     
-    // Force increases as particles approach the boundary
-    // Using a quadratic profile: force = k * (r/R)^2 where r is distance from center and R is field radius
-    double forceMagnitude = fieldStrength * normalizedDist * normalizedDist;
+    // Force increases exponentially as particles approach the boundary
+    // Using profile: force = k * exp(alpha * (r/R - 1))
+    // This gives a steep increase near the boundary while maintaining smooth behavior
+    const double alpha = 2.0; // Controls how sharply the force increases
+    double forceMagnitude = fieldStrength * std::exp(alpha * (normalizedDist - 1.0));
+    
+    // Scale force by particle energy - higher energy particles experience stronger containment
+    forceMagnitude *= (1.0 + particle.getEnergy() / particle.getMaxEnergy());
     
     return forceMagnitude;
 }
@@ -38,29 +44,37 @@ bool ContainmentField::isParticleContained(const Particle& particle) const {
     std::lock_guard<std::mutex> lock(fieldMutex);
     double x = particle.getX();
     double y = particle.getY();
-    double distanceFromCenter = std::sqrt(x*x + y*y);
+    double distance = std::sqrt(x*x + y*y);
     double maxRadius = size/2.0;
     
-    // Check if particle is within field bounds and has low enough energy to be contained
-    return distanceFromCenter < maxRadius && 
-           particle.getEnergy() < fieldStrength * (1.0 - distanceFromCenter/maxRadius);
+    // Check if particle is within field bounds
+    if (distance >= maxRadius) return false;
+    
+    // Check if particle's energy is low enough to be contained
+    double normalizedDist = distance / maxRadius;
+    double containmentThreshold = fieldStrength * (1.0 - normalizedDist * normalizedDist);
+    return particle.getEnergy() < containmentThreshold;
 }
 
 void ContainmentField::update(double dt) {
     std::lock_guard<std::mutex> lock(fieldMutex);
     
     // Update field strength with decay
+    double oldStrength = fieldStrength;
     fieldStrength *= (1.0 - decayRate * dt);
     
-    // Update grid data
-    double totalEnergy = 0.0;
+    // Calculate energy lost from field decay
+    double energyLost = (oldStrength - fieldStrength) * size * size;
+    
+    // Update grid data and accumulate total field energy
+    double totalGridEnergy = 0.0;
     for (size_t i = 0; i < fieldData.size(); ++i) {
         fieldData[i] *= (1.0 - decayRate * dt);
-        totalEnergy += fieldData[i];
+        totalGridEnergy += fieldData[i];
     }
     
-    // Update field energy
-    fieldEnergy = totalEnergy + fieldStrength * size * size;
+    // Total field energy is sum of uniform field energy and local perturbations
+    fieldEnergy = (fieldStrength * size * size) + totalGridEnergy;
 }
 
 void ContainmentField::setFieldStrength(double strength) {

@@ -67,14 +67,22 @@ void Simulation::stop() {
     std::cout << "Simulation stopped." << std::endl;
 }
 
-void Simulation::step() {
-    std::lock_guard<std::mutex> lock(simulationMutex);
+void Simulation::calculateForces() {
+    // Resize force vector if needed
+    if (particleForces.size() != particles.size()) {
+        particleForces.resize(particles.size());
+    }
     
+    // Reset forces
+    for (auto& force : particleForces) {
+        force.fx = 0.0;
+        force.fy = 0.0;
+    }
+    
+    // Calculate forces in parallel
     size_t n = particles.size();
-    if (n == 0) return;
-
-    // 1. Apply containment forces and update velocities
     size_t chunk = std::max<size_t>(1, n / numThreads);
+    
     for (size_t t = 0; t < numThreads; ++t) {
         size_t start = t * chunk;
         size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
@@ -89,18 +97,57 @@ void Simulation::step() {
                 
                 if (distance > 0) {
                     double forceMagnitude = containmentField->getContainmentForce(*particles[i]);
+                    // Force points toward center (negative position components)
                     double fx = -forceMagnitude * (x / distance);
                     double fy = -forceMagnitude * (y / distance);
-                    double vx = particles[i]->getVX() + fx * timeStep;
-                    double vy = particles[i]->getVY() + fy * timeStep;
-                    particles[i]->setVelocity(vx, vy);
+                    
+                    // Atomically accumulate forces
+                    particleForces[i].fx.store(fx, std::memory_order_relaxed);
+                    particleForces[i].fy.store(fy, std::memory_order_relaxed);
                 }
             }
         });
     }
     threadManager->waitForCompletion();
+}
+
+void Simulation::applyForces() {
+    size_t n = particles.size();
+    size_t chunk = std::max<size_t>(1, n / numThreads);
+    
+    for (size_t t = 0; t < numThreads; ++t) {
+        size_t start = t * chunk;
+        size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
+        
+        threadManager->addTask([this, start, end]() {
+            for (size_t i = start; i < end; ++i) {
+                if (i >= particles.size()) break;
+                
+                double fx = particleForces[i].fx.load(std::memory_order_relaxed);
+                double fy = particleForces[i].fy.load(std::memory_order_relaxed);
+                
+                // Update velocities based on forces
+                double vx = particles[i]->getVX() + fx * timeStep;
+                double vy = particles[i]->getVY() + fy * timeStep;
+                particles[i]->setVelocity(vx, vy);
+            }
+        });
+    }
+    threadManager->waitForCompletion();
+}
+
+void Simulation::step() {
+    std::lock_guard<std::mutex> lock(simulationMutex);
+    
+    size_t n = particles.size();
+    if (n == 0) return;
+
+    // 1. Calculate and apply forces
+    calculateForces();
+    applyForces();
 
     // 2. Update positions
+    size_t chunk = std::max<size_t>(1, n / numThreads);
     for (size_t t = 0; t < numThreads; ++t) {
         size_t start = t * chunk;
         size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
@@ -120,14 +167,46 @@ void Simulation::step() {
     updateSpatialGrid();
     
     std::vector<std::pair<size_t, size_t>> collisionPairs;
-    for (const auto& cell : spatialGrid) {
-        for (size_t i = 0; i < cell.particleIndices.size(); ++i) {
-            for (size_t j = i + 1; j < cell.particleIndices.size(); ++j) {
-                size_t p1 = cell.particleIndices[i];
-                size_t p2 = cell.particleIndices[j];
-                if (p1 >= particles.size() || p2 >= particles.size()) continue;
-                if (particles[p1]->isColliding(*particles[p2])) {
-                    collisionPairs.emplace_back(p1, p2);
+    // Check each grid cell and its neighbors
+    for (size_t y = 0; y < gridHeight; ++y) {
+        for (size_t x = 0; x < gridWidth; ++x) {
+            size_t cellIdx = y * gridWidth + x;
+            const auto& cell = spatialGrid[cellIdx];
+            
+            // Check within the same cell
+            for (size_t i = 0; i < cell.particleIndices.size(); ++i) {
+                for (size_t j = i + 1; j < cell.particleIndices.size(); ++j) {
+                    size_t p1 = cell.particleIndices[i];
+                    size_t p2 = cell.particleIndices[j];
+                    if (p1 >= particles.size() || p2 >= particles.size()) continue;
+                    if (particles[p1]->isColliding(*particles[p2])) {
+                        collisionPairs.emplace_back(p1, p2);
+                    }
+                }
+            }
+            
+            // Check neighboring cells (right and bottom neighbors only to avoid duplicates)
+            const int dx[] = {1, 0, 1};  // right, bottom, bottom-right
+            const int dy[] = {0, 1, 1};
+            
+            for (int dir = 0; dir < 3; ++dir) {
+                int nx = static_cast<int>(x) + dx[dir];
+                int ny = static_cast<int>(y) + dy[dir];
+                
+                if (nx >= 0 && nx < static_cast<int>(gridWidth) && 
+                    ny >= 0 && ny < static_cast<int>(gridHeight)) {
+                    size_t neighborIdx = ny * gridWidth + nx;
+                    const auto& neighborCell = spatialGrid[neighborIdx];
+                    
+                    // Check collisions between current cell and neighbor cell
+                    for (size_t p1 : cell.particleIndices) {
+                        for (size_t p2 : neighborCell.particleIndices) {
+                            if (p1 >= particles.size() || p2 >= particles.size()) continue;
+                            if (particles[p1]->isColliding(*particles[p2])) {
+                                collisionPairs.emplace_back(p1, p2);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -155,18 +234,79 @@ void Simulation::step() {
     containmentField->update(timeStep);
 }
 
+void Simulation::recalculateGridSize() {
+    // Use avg particle radius * 2 as the cell size for efficient collision detection
+    if (particles.empty()) {
+        gridCellSize = 2.0; // Default size
+        return;
+    }
+
+    double avgRadius = 0.0;
+    for (const auto& p : particles) {
+        avgRadius += p->PARTICLE_RADIUS;
+    }
+    avgRadius /= particles.size();
+    
+    // Set grid cell size to be slightly larger than two particle diameters
+    gridCellSize = avgRadius * 4.0;
+    
+    // Update grid dimensions
+    gridWidth = static_cast<size_t>(std::ceil(fieldSize / gridCellSize));
+    gridHeight = static_cast<size_t>(std::ceil(fieldSize / gridCellSize));
+    
+    // Resize grid
+    spatialGrid.resize(gridWidth * gridHeight);
+}
+
 void Simulation::updateSpatialGrid() {
-    // Reset all cells
+    // Recalculate grid size periodically or when particle count changes significantly
+    static size_t lastParticleCount = 0;
+    if (std::abs(static_cast<long>(particles.size()) - static_cast<long>(lastParticleCount)) > particles.size() / 10) {
+        recalculateGridSize();
+        lastParticleCount = particles.size();
+    }
+    
+    // Clear all cells
     for (auto& cell : spatialGrid) {
         cell.clear();
     }
     
-    // Assign particles to grid cells
-    for (size_t i = 0; i < particles.size(); ++i) {
-        auto [gridX, gridY] = getGridCoords(particles[i]->getX(), particles[i]->getY());
-        size_t idx = getGridIndex(gridX, gridY);
-        if (idx < spatialGrid.size()) {
-            spatialGrid[idx].particleIndices.push_back(i);
+    // Reserve space in cells based on average density
+    size_t avgParticlesPerCell = (particles.size() / spatialGrid.size()) + 1;
+    for (auto& cell : spatialGrid) {
+        cell.particleIndices.reserve(avgParticlesPerCell * 2);
+    }
+    
+    // Distribute particles to grid cells in parallel
+    size_t n = particles.size();
+    size_t chunk = std::max<size_t>(1, n / numThreads);
+    
+    std::vector<std::vector<std::pair<size_t, size_t>>> threadLocalAssignments(numThreads);
+    for (size_t t = 0; t < numThreads; ++t) {
+        size_t start = t * chunk;
+        size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
+        
+        threadManager->addTask([this, start, end, t, &threadLocalAssignments]() {
+            auto& assignments = threadLocalAssignments[t];
+            assignments.reserve(end - start);
+            
+            for (size_t i = start; i < end; ++i) {
+                if (i >= particles.size()) break;
+                
+                auto [gridX, gridY] = getGridCoords(particles[i]->getX(), particles[i]->getY());
+                size_t idx = getGridIndex(gridX, gridY);
+                if (idx < spatialGrid.size()) {
+                    assignments.emplace_back(idx, i);
+                }
+            }
+        });
+    }
+    threadManager->waitForCompletion();
+    
+    // Merge thread-local assignments into the spatial grid
+    for (const auto& assignments : threadLocalAssignments) {
+        for (const auto& [cellIdx, particleIdx] : assignments) {
+            spatialGrid[cellIdx].particleIndices.push_back(particleIdx);
         }
     }
 }
@@ -213,11 +353,15 @@ size_t Simulation::getParticleCount() const {
 std::vector<std::unique_ptr<Particle>> Simulation::getParticlesCopy() const {
     std::lock_guard<std::mutex> lock(particleMutex);
     std::vector<std::unique_ptr<Particle>> copy;
+    copy.reserve(particles.size());
     for (const auto& p : particles) {
-        // Deep copy not possible for unique_ptr without clone method, so just return shallow copy for now
-        // (Rendering only reads x/y, so this is safe as long as Particle's accessors are thread-safe)
-        // If deep copy needed, implement a clone() method in Particle
-        copy.push_back(std::unique_ptr<Particle>(nullptr)); // placeholder, not used
+        // Create a lightweight copy with just position data for rendering
+        copy.push_back(std::make_unique<Particle>(
+            p->getX(), p->getY(),
+            p->getEnergy(),
+            p->PARTICLE_RADIUS,
+            p->getMaxEnergy()
+        ));
     }
     return copy;
 }
