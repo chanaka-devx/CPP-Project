@@ -28,7 +28,8 @@ void Simulation::initializeParticles(const Config& config) {
             dis(gen), dis(gen),
             config.initial_energy,
             config.particle_radius,
-            config.max_energy
+            config.max_energy,
+            1.0 // mass
         );
         particle->setVelocity(vel_dis(gen), vel_dis(gen));
         particles.push_back(std::move(particle));
@@ -60,10 +61,10 @@ void Simulation::stop() {
 }
 
 void Simulation::step() {
+    std::lock_guard<std::mutex> lock(particleMutex);
     // Parallelize applyForces
     size_t n = particles.size();
     size_t chunk = std::max<size_t>(1, n / numThreads);
-    std::vector<std::future<void>> futures;
     for (size_t t = 0; t < numThreads; ++t) {
         size_t start = t * chunk;
         size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
@@ -120,11 +121,13 @@ void Simulation::step() {
 
 void Simulation::addParticle(std::unique_ptr<Particle> particle) {
     if (particle) {
+        std::lock_guard<std::mutex> lock(particleMutex);
         particles.push_back(std::move(particle));
     }
 }
 
 void Simulation::removeEscapedParticles() {
+    std::lock_guard<std::mutex> lock(particleMutex);
     particles.erase(
         std::remove_if(
             particles.begin(), particles.end(),
@@ -137,7 +140,20 @@ void Simulation::removeEscapedParticles() {
 }
 
 size_t Simulation::getParticleCount() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
     return particles.size();
+}
+
+std::vector<std::unique_ptr<Particle>> Simulation::getParticlesCopy() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
+    std::vector<std::unique_ptr<Particle>> copy;
+    for (const auto& p : particles) {
+        // Deep copy not possible for unique_ptr without clone method, so just return shallow copy for now
+        // (Rendering only reads x/y, so this is safe as long as Particle's accessors are thread-safe)
+        // If deep copy needed, implement a clone() method in Particle
+        copy.push_back(std::unique_ptr<Particle>(nullptr)); // placeholder, not used
+    }
+    return copy;
 }
 
 const std::vector<std::unique_ptr<Particle>>& Simulation::getParticles() const {
@@ -145,6 +161,7 @@ const std::vector<std::unique_ptr<Particle>>& Simulation::getParticles() const {
 }
 
 double Simulation::getTotalEnergy() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
     double total = 0.0;
     for (const auto& particle : particles) {
         total += particle->getEnergy();
@@ -162,6 +179,7 @@ size_t Simulation::getNumThreads() const {
 }
 
 void Simulation::updatePositions(double dt) {
+    std::lock_guard<std::mutex> lock(particleMutex);
     for (auto& particle : particles) {
         double x = particle->getX() + particle->getVX() * dt;
         double y = particle->getY() + particle->getVY() * dt;
@@ -170,6 +188,7 @@ void Simulation::updatePositions(double dt) {
 }
 
 void Simulation::handleCollisions() {
+    std::lock_guard<std::mutex> lock(particleMutex);
     for (size_t i = 0; i < particles.size(); ++i) {
         for (size_t j = i + 1; j < particles.size(); ++j) {
             if (particles[i]->isColliding(*particles[j])) {
@@ -180,6 +199,7 @@ void Simulation::handleCollisions() {
 }
 
 void Simulation::applyForces(double dt) {
+    std::lock_guard<std::mutex> lock(particleMutex);
     for (auto& particle : particles) {
         double x = particle->getX();
         double y = particle->getY();

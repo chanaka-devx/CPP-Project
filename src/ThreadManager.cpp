@@ -2,7 +2,7 @@
 #include <stdexcept>
 
 ThreadManager::ThreadManager(size_t numThreads) 
-    : numThreads(numThreads), running(false) {
+    : numThreads(numThreads), running(false), activeThreads(0) {
     if (numThreads <= 0) {
         throw std::invalid_argument("Number of threads must be positive");
     }
@@ -59,12 +59,12 @@ void ThreadManager::waitForCompletion() {
     std::unique_lock<std::mutex> lock(completionMutex);
     taskCondition.wait(lock, [this] {
         std::lock_guard<std::mutex> tlock(taskMutex);
-        return taskQueue.empty() && activeThreads == 0;
+        return taskQueue.empty() && activeThreads.load() == 0;
     });
 }
 
 size_t ThreadManager::getActiveThreadCount() const {
-    return activeThreads;
+    return activeThreads.load();
 }
 
 void ThreadManager::processNextTask() {

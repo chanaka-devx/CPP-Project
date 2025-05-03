@@ -4,32 +4,35 @@
 #include <chrono>
 #include <algorithm>
 
-Particle::Particle(double x, double y, double energy, double radius, double max_energy)
-    : x(x), y(y), vx(0.0), vy(0.0), energy(energy), MAX_ENERGY(max_energy), PARTICLE_RADIUS(radius) {
-    // Use the provided energy value
+Particle::Particle(double x, double y, double energy, double radius, double max_energy, double mass)
+    : x(x), y(y), vx(0.0), vy(0.0), energy(energy), MAX_ENERGY(max_energy), PARTICLE_RADIUS(radius), mass(mass) {
 }
 
-Particle::~Particle() {
-}
+Particle::~Particle() {}
 
 double Particle::getX() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
     return x;
 }
 
 double Particle::getY() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
     return y;
 }
 
 void Particle::setPosition(double newX, double newY) {
+    std::lock_guard<std::mutex> lock(particleMutex);
     x = newX;
     y = newY;
 }
 
 double Particle::getVX() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
     return vx;
 }
 
 double Particle::getVY() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
     return vy;
 }
 
@@ -40,6 +43,7 @@ void Particle::setVelocity(double newVX, double newVY) {
 }
 
 double Particle::getEnergy() const {
+    std::lock_guard<std::mutex> lock(particleMutex);
     return energy;
 }
 
@@ -47,41 +51,34 @@ double Particle::getMaxEnergy() const {
     return MAX_ENERGY;
 }
 
+double Particle::getMass() const {
+    return mass;
+}
+
 void Particle::setEnergy(double newEnergy) {
+    std::lock_guard<std::mutex> lock(particleMutex);
     energy = std::clamp(newEnergy, 0.0, MAX_ENERGY);
 }
 
 void Particle::addEnergy(double delta) {
-    setEnergy(energy + delta);
+    setEnergy(getEnergy() + delta);
 }
 
 void Particle::collide(Particle& other) {
-    // Simple elastic collision: swap velocities
-    std::lock_guard<std::mutex> lock1(particleMutex);
-    std::lock_guard<std::mutex> lock2(other.particleMutex);
-    std::swap(vx, other.vx);
-    std::swap(vy, other.vy);
+    if (this == &other) return;
+    std::scoped_lock lock(particleMutex, other.particleMutex);
+    // Elastic collision: conserve momentum and energy
+    double v1x = vx, v1y = vy, v2x = other.vx, v2y = other.vy;
+    double m1 = mass, m2 = other.mass;
+    vx = (v1x * (m1 - m2) + 2 * m2 * v2x) / (m1 + m2);
+    vy = (v1y * (m1 - m2) + 2 * m2 * v2y) / (m1 + m2);
+    other.vx = (v2x * (m2 - m1) + 2 * m1 * v1x) / (m1 + m2);
+    other.vy = (v2y * (m2 - m1) + 2 * m1 * v1y) / (m1 + m2);
 }
-
-
-void Particle::collide(Particle& other) {
-    std::lock_guard<std::mutex> lock1(particleMutex);
-    std::lock_guard<std::mutex> lock2(other.particleMutex);
-
-    // Calculate new velocities based on conservation of momentum, simplified elastic collision
-    double v1x_new = (vx * (mass - other.mass) + 2 * other.mass * other.vx) / (mass + other.mass);
-    double v1y_new = (vy * (mass - other.mass) + 2 * other.mass * other.vy) / (mass + other.mass);
-    double v2x_new = (other.vx * (other.mass - mass) + 2 * mass * vx) / (mass + other.mass);
-    double v2y_new = (other.vy * (other.mass - mass) + 2 * mass * vy) / (mass + other.mass);
-
-    vx = v1x_new;
-    vy = v1y_new;
-    other.vx = v2x_new;
-    other.vy = v2y_new;
-}
-
 
 bool Particle::isColliding(const Particle& other) const {
+    std::lock_guard<std::mutex> lock1(particleMutex);
+    std::lock_guard<std::mutex> lock2(other.particleMutex);
     double dx = x - other.x;
     double dy = y - other.y;
     double distSq = dx*dx + dy*dy;

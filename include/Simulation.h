@@ -27,6 +27,7 @@ public:
     void addParticle(std::unique_ptr<Particle> particle);
     void removeEscapedParticles(); 
     size_t getParticleCount() const;
+    std::vector<std::unique_ptr<Particle>> getParticlesCopy() const;
     const std::vector<std::unique_ptr<Particle>>& getParticles() const; 
 
     double getTotalEnergy() const; 
@@ -54,4 +55,4 @@ private:
     std::condition_variable cv;
     std::atomic<bool> running{false};
     size_t numThreads;
-}; 
+};

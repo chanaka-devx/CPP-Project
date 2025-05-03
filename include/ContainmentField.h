@@ -40,9 +40,9 @@ private:
         double strength;
         double lifetime;
     };
-    std::vector<EnergyPulse*> energyPulses;
+    std::vector<std::unique_ptr<EnergyPulse>> energyPulses;
 
     mutable std::mutex fieldMutex;
 
     void initializeField();
-}; 
+};

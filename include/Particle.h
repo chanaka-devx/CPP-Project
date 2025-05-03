@@ -7,7 +7,7 @@
 
 class Particle {
 public:
-    Particle(double x, double y, double energy, double radius, double max_energy);
+    Particle(double x, double y, double energy, double radius, double max_energy, double mass = 1.0);
     ~Particle();
 
     double getX() const;
@@ -23,17 +23,17 @@ public:
     void addEnergy(double delta);
     double getMaxEnergy() const;
 
+    double getMass() const;
+
     void collide(Particle& other); 
     bool isColliding(const Particle& other) const;
 
 private:
     double x, y;
     double vx, vy;
-    
     double energy;
     const double MAX_ENERGY;
-    
     const double PARTICLE_RADIUS;
-    
+    double mass;
     mutable std::mutex particleMutex;
-}; 
+};

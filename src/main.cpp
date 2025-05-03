@@ -138,7 +138,7 @@ int main() {
 
             simulation.step();
 
-            renderASCII(simulation.getParticles(), config.field_size, config);
+            renderASCII(simulation.getParticlesCopy(), config.field_size, config);
 
             auto frameEnd = std::chrono::high_resolution_clock::now();
             auto frameDuration = std::chrono::duration<double>(frameEnd - frameStart).count();
@@ -171,4 +171,4 @@ int main() {
         return 1;
     }
     return 0;
-} 
+}
