@@ -26,7 +26,7 @@ double ContainmentField::getContainmentForce(const Particle& particle) const {
         return fieldStrength; 
     }
     
-    return fieldStrength * distance * 0.8;
+    return fieldStrength * distance * distance;
 }
 
 bool ContainmentField::isParticleContained(const Particle& particle) const {
@@ -35,13 +35,24 @@ bool ContainmentField::isParticleContained(const Particle& particle) const {
     double distanceFromCenter = x*x + y*y;
     return distanceFromCenter < (size * size);
 }
-
-void ContainmentField::update(double dt) {
+/*void ContainmentField::update(double dt) {
     std::lock_guard<std::mutex> lock(fieldMutex);
     for (size_t i = 0; i < fieldData.size(); ++i) {
         fieldData[i] *= (1.0 - decayRate * dt);
     }
+}*/
+
+
+void ContainmentField::update(double dt) {
+    std::lock_guard<std::mutex> lock(fieldMutex);
+    double totalEnergy = 0.0;
+    for (size_t i = 0; i < fieldData.size(); ++i) {
+        fieldData[i] *= (1.0 - decayRate * dt);
+        totalEnergy += fieldData[i];  // Accumulate energy
+    }
+    fieldEnergy = totalEnergy;  // Update field energy
 }
+
 
 void ContainmentField::setFieldStrength(double strength) {
     std::lock_guard<std::mutex> lock(fieldMutex);

@@ -63,6 +63,24 @@ void Particle::collide(Particle& other) {
     std::swap(vy, other.vy);
 }
 
+
+void Particle::collide(Particle& other) {
+    std::lock_guard<std::mutex> lock1(particleMutex);
+    std::lock_guard<std::mutex> lock2(other.particleMutex);
+
+    // Calculate new velocities based on conservation of momentum, simplified elastic collision
+    double v1x_new = (vx * (mass - other.mass) + 2 * other.mass * other.vx) / (mass + other.mass);
+    double v1y_new = (vy * (mass - other.mass) + 2 * other.mass * other.vy) / (mass + other.mass);
+    double v2x_new = (other.vx * (other.mass - mass) + 2 * mass * vx) / (mass + other.mass);
+    double v2y_new = (other.vy * (other.mass - mass) + 2 * mass * vy) / (mass + other.mass);
+
+    vx = v1x_new;
+    vy = v1y_new;
+    other.vx = v2x_new;
+    other.vy = v2y_new;
+}
+
+
 bool Particle::isColliding(const Particle& other) const {
     double dx = x - other.x;
     double dy = y - other.y;

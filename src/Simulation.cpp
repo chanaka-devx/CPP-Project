@@ -60,12 +60,62 @@ void Simulation::stop() {
 }
 
 void Simulation::step() {
+    // Parallelize applyForces
+    size_t n = particles.size();
+    size_t chunk = std::max<size_t>(1, n / numThreads);
+    std::vector<std::future<void>> futures;
+    for (size_t t = 0; t < numThreads; ++t) {
+        size_t start = t * chunk;
+        size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
+        threadManager->addTask([this, start, end]() {
+            for (size_t i = start; i < end && i < particles.size(); ++i) {
+                double x = particles[i]->getX();
+                double y = particles[i]->getY();
+                double distance = std::sqrt(x*x + y*y);
+                if (distance == 0) continue;
+                double forceMagnitude = -containmentField->getFieldStrength() * distance / fieldSize;
+                double ax = forceMagnitude * (x / distance);
+                double ay = forceMagnitude * (y / distance);
+                double vx = particles[i]->getVX() + ax * timeStep;
+                double vy = particles[i]->getVY() + ay * timeStep;
+                particles[i]->setVelocity(vx, vy);
+            }
+        });
+    }
+    threadManager->waitForCompletion();
+
+    // Parallelize updatePositions
+    for (size_t t = 0; t < numThreads; ++t) {
+        size_t start = t * chunk;
+        size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
+        threadManager->addTask([this, start, end]() {
+            for (size_t i = start; i < end && i < particles.size(); ++i) {
+                double x = particles[i]->getX() + particles[i]->getVX() * timeStep;
+                double y = particles[i]->getY() + particles[i]->getVY() * timeStep;
+                particles[i]->setPosition(x, y);
+            }
+        });
+    }
+    threadManager->waitForCompletion();
+
+    // Parallelize handleCollisions (naive O(n^2) split by outer loop)
+    for (size_t t = 0; t < numThreads; ++t) {
+        size_t start = t * chunk;
+        size_t end = (t == numThreads - 1) ? n : (t + 1) * chunk;
+        threadManager->addTask([this, start, end, n]() {
+            for (size_t i = start; i < end && i < n; ++i) {
+                for (size_t j = i + 1; j < n; ++j) {
+                    if (particles[i]->isColliding(*particles[j])) {
+                        particles[i]->collide(*particles[j]);
+                    }
+                }
+            }
+        });
+    }
+    threadManager->waitForCompletion();
+
     removeEscapedParticles();
-    applyForces(timeStep);
-    
-    if (std::rand() % 3 != 0) {
-        handleCollisions();
-    }    
+    containmentField->update(timeStep);
 }
 
 void Simulation::addParticle(std::unique_ptr<Particle> particle) {
@@ -146,7 +196,7 @@ void Simulation::applyForces(double dt) {
 
 void Simulation::workerThread(size_t threadId) {
     while (running) {
-        // Placeholder: real work should be scheduled via ThreadManager
+        threadManager->addTask([this] { this->step(); });  // Scheduling the task for the thread
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
