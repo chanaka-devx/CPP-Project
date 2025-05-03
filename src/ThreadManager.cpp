@@ -20,12 +20,26 @@ void ThreadManager::start() {
 }
 
 void ThreadManager::stop() {
-    running = false;
+    {
+        std::lock_guard<std::mutex> lock(taskMutex);
+        running = false;
+    }
     taskCondition.notify_all();
-    for (auto& t : threads) {
-        if (t.joinable()) t.join();
+    
+    for (auto& thread : threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
     }
     threads.clear();
+    
+    // Clear any remaining tasks
+    std::queue<std::function<void()>> empty;
+    {
+        std::lock_guard<std::mutex> lock(taskMutex);
+        std::swap(taskQueue, empty);
+        activeThreads = 0;
+    }
 }
 
 void ThreadManager::addTask(std::function<void()> task) {
@@ -56,10 +70,9 @@ size_t ThreadManager::getTaskCount() const {
 }
 
 void ThreadManager::waitForCompletion() {
-    std::unique_lock<std::mutex> lock(completionMutex);
+    std::unique_lock<std::mutex> lock(taskMutex);
     taskCondition.wait(lock, [this] {
-        std::lock_guard<std::mutex> tlock(taskMutex);
-        return taskQueue.empty() && activeThreads.load() == 0;
+        return taskQueue.empty() && activeThreads == 0;
     });
 }
 
@@ -86,14 +99,31 @@ void ThreadManager::workerThread(size_t threadId) {
         std::function<void()> task;
         {
             std::unique_lock<std::mutex> lock(taskMutex);
-            taskCondition.wait(lock, [this] { return !taskQueue.empty() || !running; });
-            if (!running && taskQueue.empty()) return;
-            task = std::move(taskQueue.front());
-            taskQueue.pop();
-            ++activeThreads;
+            taskCondition.wait(lock, [this] { 
+                return !taskQueue.empty() || !running; 
+            });
+            
+            if (!running && taskQueue.empty()) {
+                return;
+            }
+            
+            if (!taskQueue.empty()) {
+                task = std::move(taskQueue.front());
+                taskQueue.pop();
+                activeThreads++;
+            }
         }
-        if (task) task();
-        --activeThreads;
-        taskCondition.notify_all();
+        
+        if (task) {
+            task();
+        }
+        
+        {
+            std::lock_guard<std::mutex> lock(taskMutex);
+            activeThreads--;
+            if (taskQueue.empty() && activeThreads == 0) {
+                taskCondition.notify_all();
+            }
+        }
     }
 }

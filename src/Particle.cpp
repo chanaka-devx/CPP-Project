@@ -67,13 +67,62 @@ void Particle::addEnergy(double delta) {
 void Particle::collide(Particle& other) {
     if (this == &other) return;
     std::scoped_lock lock(particleMutex, other.particleMutex);
-    // Elastic collision: conserve momentum and energy
-    double v1x = vx, v1y = vy, v2x = other.vx, v2y = other.vy;
-    double m1 = mass, m2 = other.mass;
-    vx = (v1x * (m1 - m2) + 2 * m2 * v2x) / (m1 + m2);
-    vy = (v1y * (m1 - m2) + 2 * m2 * v2y) / (m1 + m2);
-    other.vx = (v2x * (m2 - m1) + 2 * m1 * v1x) / (m1 + m2);
-    other.vy = (v2y * (m2 - m1) + 2 * m1 * v1y) / (m1 + m2);
+
+    // Calculate collision normal
+    double dx = other.x - x;
+    double dy = other.y - y;
+    double dist = std::sqrt(dx*dx + dy*dy);
+    if (dist < 1e-10) return;
+
+    double nx = dx / dist;  // Normal vector x
+    double ny = dy / dist;  // Normal vector y
+
+    // Relative velocity
+    double rvx = other.vx - vx;
+    double rvy = other.vy - vy;
+
+    // Relative velocity along normal
+    double velAlongNormal = rvx * nx + rvy * ny;
+    if (velAlongNormal > 0) return; // Objects moving apart
+
+    // Coefficient of restitution (1.0 for perfectly elastic)
+    const double restitution = 1.0;
+
+    // Impulse scalar
+    double j = -(1.0 + restitution) * velAlongNormal;
+    j /= 1.0/mass + 1.0/other.mass;
+
+    // Apply impulse
+    double impulseX = j * nx;
+    double impulseY = j * ny;
+
+    vx -= impulseX / mass;
+    vy -= impulseY / mass;
+    other.vx += impulseX / other.mass;
+    other.vy += impulseY / other.mass;
+
+    // Conserve energy by scaling velocities
+    double totalEnergyBefore = mass*(vx*vx + vy*vy)/2.0 + other.mass*(other.vx*other.vx + other.vy*other.vy)/2.0;
+    double totalEnergyAfter = mass*(vx*vx + vy*vy)/2.0 + other.mass*(other.vx*other.vx + other.vy*other.vy)/2.0;
+    
+    if (totalEnergyAfter > 0) {
+        double scale = std::sqrt(totalEnergyBefore/totalEnergyAfter);
+        vx *= scale;
+        vy *= scale;
+        other.vx *= scale;
+        other.vy *= scale;
+    }
+
+    // Prevent overlap
+    double overlap = PARTICLE_RADIUS + other.PARTICLE_RADIUS - dist;
+    if (overlap > 0) {
+        double moveX = (overlap/2.0) * nx;
+        double moveY = (overlap/2.0) * ny;
+        x -= moveX;
+        y -= moveY;
+        other.x += moveX;
+        other.y += moveY;
+    }
 }
 
 bool Particle::isColliding(const Particle& other) const {

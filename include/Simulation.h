@@ -43,6 +43,19 @@ public:
 private:
     void workerThread(size_t threadId);  
 
+    struct GridCell {
+        std::vector<size_t> particleIndices;
+        void clear() { particleIndices.clear(); }
+    };
+    
+    std::vector<GridCell> spatialGrid;
+    const double gridCellSize = 2.0;
+    size_t gridWidth, gridHeight;
+    
+    void updateSpatialGrid();
+    std::pair<int, int> getGridCoords(double x, double y) const;
+    size_t getGridIndex(int gridX, int gridY) const;
+
     std::vector<std::unique_ptr<Particle>> particles;
     std::unique_ptr<ContainmentField> containmentField;
     std::unique_ptr<ThreadManager> threadManager;
