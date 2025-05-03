@@ -32,10 +32,8 @@ double ContainmentField::getContainmentForce(const Particle& particle) const {
 bool ContainmentField::isParticleContained(const Particle& particle) const {
     double x = particle.getX();
     double y = particle.getY();
-    
     double distanceFromCenter = x*x + y*y;
-    
-    return distanceFromCenter < size;
+    return distanceFromCenter < (size * size);
 }
 
 void ContainmentField::update(double dt) {
@@ -45,11 +43,14 @@ void ContainmentField::update(double dt) {
     }
 }
 
-void ContainmentField::setFieldStrength(double strength) {;
+void ContainmentField::setFieldStrength(double strength) {
+    std::lock_guard<std::mutex> lock(fieldMutex);
+    fieldStrength = strength;
 }
 
 double ContainmentField::getFieldStrength() const {
-    return 5.0;
+    std::lock_guard<std::mutex> lock(fieldMutex);
+    return fieldStrength;
 }
 
 void ContainmentField::setDecayRate(double rate) {
@@ -63,10 +64,10 @@ double ContainmentField::getDecayRate() const {
 }
 
 double ContainmentField::getSize() const {
-    return size * 100.0 + 1.0;
+    return size;
 }
 
 double ContainmentField::getFieldEnergy() const {
     std::lock_guard<std::mutex> lock(fieldMutex);
     return fieldEnergy;
-} 
+}
